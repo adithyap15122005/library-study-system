@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { modulesFor, stepBooks } from "./courses.js";
 import { badge, bookCard, dateLabel, empty, esc, field, heading, icon, linkTo, option, progress, sectionHeading } from "./ui.js";
 
 function recommendationUrl(topicId) {
@@ -55,58 +56,12 @@ function pathwayCard(pathway) {
 
 async function pathways(ctx) {
   const { pathways: items } = await api("/pathways/me");
-  const action = linkTo("/pathways/new", "Create pathway", "plus", "button primary");
-  ctx.render(`${heading("Study pathways", "Choose a goal, learn topics in prerequisite order, and track your progress.", "", action)}
-    ${items.length ? `<div class="path-grid">${items.map(pathwayCard).join("")}</div>` : empty("No pathways yet", "Choose your first learning goal and the topics you want to explore.", action, "path")}`);
+  const action = linkTo("/courses", "Explore courses", "arrow", "button primary");
+  ctx.render(`${heading("My study pathways", "Continue a course and track your verified progress.", "", action)}
+    ${items.length ? `<div class="path-grid">${items.map(pathwayCard).join("")}</div>` : empty("No pathways yet", "Choose a course and Folio will generate its complete learning sequence.", action, "path")}`);
 }
 
-async function newPathway(ctx) {
-  const { topics } = await api("/topics");
-  ctx.render(`<div class="back-link">${linkTo("/pathways", "Study pathways", "back")}</div>
-    ${heading("Create a study pathway", "Set a learning goal and select topics. Folio uses the catalog’s prerequisites to order your steps.")}
-    <section class="panel pad">
-      <form id="pathway-form" class="form">
-        <div class="form-grid">
-          ${field("Pathway name", '<input name="name" maxlength="200" placeholder="Machine Learning Foundations" required>')}
-          ${field("Learning goal", '<input name="target_goal" maxlength="255" placeholder="Learn how to evaluate a classifier" required>')}
-          ${field("Description (optional)", '<textarea name="description" maxlength="6000" placeholder="What would you like to get out of this pathway?"></textarea>', "wide")}
-        </div>
-        ${sectionHeading("Choose topics")}
-        ${field("Filter topics", '<input type="search" name="topic_filter" placeholder="Filter by concept or subject">')}
-        ${topics.length ? `<div class="topic-list" role="group" aria-label="Choose topics">${topics.map(topic => `
-          <label class="checkbox" data-topic-text="${esc(`${topic.name} ${topic.subject} ${topic.difficulty_level || ""}`.toLowerCase())}">
-            <input type="checkbox" name="topic_ids" value="${Number(topic.topic_id)}">
-            <span><strong>${esc(topic.name)}</strong><small>${esc(topic.subject)} · ${esc(topic.difficulty_level)}</small>
-            ${topic.prerequisites?.length ? `<small>Requires ${esc(topic.prerequisites.map(item => item.name).join(", "))}</small>` : ""}
-            </span>
-          </label>`).join("")}</div><p id="topic-filter-message" class="muted small" role="status" hidden>No topics match that filter.</p>` :
-          empty("No topics are available", "Ask a library administrator to add topics to the catalog.", "", "path")}
-        <label class="checkbox"><input type="checkbox" name="include_prerequisites"><span>Include missing prerequisites automatically</span></label>
-        <div class="form-message" role="alert"></div>
-        <div class="actions"><button type="submit" class="button primary" ${topics.length ? "" : "disabled"}>${icon("plus", true)} Create pathway</button></div>
-      </form>
-    </section>`);
-  const filter = document.querySelector('[name="topic_filter"]');
-  filter?.addEventListener("input", event => {
-    const needle = event.currentTarget.value.trim().toLowerCase();
-    const rows = [...document.querySelectorAll("[data-topic-text]")];
-    rows.forEach(row => { row.hidden = !row.dataset.topicText.includes(needle) && !row.querySelector("input").checked; });
-    const status = document.querySelector("#topic-filter-message");
-    if (status) status.hidden = !rows.every(row => row.hidden);
-  });
-  ctx.form("pathway-form", async values => {
-    const ids = values.getAll("topic_ids").map(Number);
-    if (!ids.length) throw new Error("Select at least one topic to build your pathway.");
-    const data = await api("/pathways", { method: "POST", body: {
-      name: values.get("name"), target_goal: values.get("target_goal"), description: values.get("description"),
-      topic_ids: ids, include_prerequisites: values.has("include_prerequisites"),
-    } });
-    ctx.go(`/pathways/${Number(data.pathway.pathway_id)}`);
-    ctx.notice("Study pathway created.");
-  });
-}
-
-function stepView(step) {
+function stepView(step, verified) {
   const id = Number(step.pathway_topic_id);
   const label = { available: "Available", completed: "Completed", locked: "Locked" }[step.state] || "Locked";
   const stateTone = step.state === "available" ? "" : step.state === "completed" ? "score" : "neutral";
@@ -114,16 +69,16 @@ function stepView(step) {
   return `<li class="step ${esc(step.state)}">
     <span class="avatar number">${step.state === "completed" ? icon("check", true) : esc(step.sequence_no)}</span>
     <div><h3>${esc(step.name)}</h3>
-      <div class="tags">${badge(label, stateTone, stateIcon)} ${badge(step.difficulty_level, "neutral")}</div>
+      <div class="tags">${badge(label, stateTone, stateIcon)} ${badge(step.difficulty_level, "neutral")}
+        ${step.estimated_hours ? badge(`${step.estimated_hours} hours`, "neutral", "clock") : ""}</div>
       ${step.description ? `<p>${esc(step.description)}</p>` : ""}
       ${step.prerequisites?.length ? `<p class="small muted">Prerequisites include ${esc(step.prerequisites.map(topic => topic.name).join(", "))}.</p>` : ""}
-      ${step.blocked_by?.length ? `<p class="small"><strong>Finish ${esc(step.blocked_by.map(topic => topic.name).join(", "))} to unlock this step.</strong></p>` : ""}
+      ${step.blocked_by?.length ? `<p class="small muted"><strong>Finish ${esc(step.blocked_by[0].name)}${step.blocked_by.length > 1 ? ` and ${step.blocked_by.length - 1} other earlier topics` : ""} to unlock this step.</strong></p>` : ""}
       ${step.completed_at ? `<p class="small muted">Completed ${dateLabel(step.completed_at, true)}</p>` : ""}
       <div class="actions">
         ${linkTo(recommendationUrl(step.topic_id), "Find topic recommendations", "spark")}
-        ${step.books?.length ? `<details class="step-books"><summary>${step.books.length} related ${step.books.length === 1 ? "book" : "books"}</summary>
-          <ul>${step.books.map(book => `<li>${linkTo(`/books/${Number(book.book_id)}`, book.title, "")} <span class="small muted">· ${esc(book.author)}</span></li>`).join("")}</ul></details>` : ""}
       </div>
+      ${verified || step.books?.length ? stepBooks(step.books, "Related catalogue books") : ""}
     </div>
     ${step.state === "available" ? `<div class="actions"><button type="button" class="button primary compact" data-action="complete-step" data-id="${id}">${icon("check", true)} Mark complete</button></div>` : ""}
   </li>`;
@@ -131,14 +86,25 @@ function stepView(step) {
 
 async function pathway(ctx) {
   const { pathway: item } = await api(`/pathways/${ctx.params[0]}`);
+  const modules = modulesFor(item.steps);
+  const percent = Math.min(100, Math.max(0, Number(item.progress_percent) || 0));
   ctx.render(`<div class="back-link">${linkTo("/pathways", "Study pathways", "back")}</div>
-    ${heading(item.name, item.target_goal, "", linkTo(`/pathways/${item.pathway_id}/verify`, "Verify progress", "shield", "button secondary"))}
-    <section class="panel pad">${sectionHeading("Progress", `${item.completed_steps} of ${item.total_steps} steps complete`)}
-      ${progress(item)}${item.description ? `<p class="section muted">${esc(item.description)}</p>` : ""}
+    <section class="course-hero pathway-hero"><div>
+      <h1>${esc(item.name)}</h1><p>${esc(item.description || item.target_goal)}</p>
+      <div class="tags">${badge(`${item.total_steps} topics`, "neutral", "path")}
+      ${item.estimated_hours ? badge(`${item.estimated_hours} hours`, "neutral", "clock") : ""}
+      ${linkTo(`/pathways/${item.pathway_id}/verify`, "Verify progress", "shield", "button light")}</div>
+    </div><aside class="pathway-progress">
+      <div class="progress-ring" style="--progress: ${percent}%"><strong>${percent}%</strong></div>
+      <div><h2>Study progress</h2><p>${item.completed_steps} of ${item.total_steps} steps complete</p></div>
+    </aside>
     </section>
-    <section class="section">${sectionHeading("Learning sequence")}
-      <ol class="steps">${item.steps.map(stepView).join("")}</ol>
-    </section>`);
+    <section class="section stack">${modules.map((module, index) => `<details class="module-panel panel"
+      ${module.steps.some(step => step.state === "available") || modules.length === 1 ? "open" : ""}>
+      <summary><span><span class="module-label">Module ${index + 1}</span> ${esc(module.name)}</span>
+      <span class="small muted">${module.steps.filter(step => step.is_completed).length} / ${module.steps.length} complete</span></summary>
+      <ol class="steps">${module.steps.map(step => stepView(step, item.course_id != null)).join("")}</ol>
+    </details>`).join("")}</section>`);
   ctx.actions("complete-step", async ({ id }) => {
     await api(`/pathway-topics/${Number(id)}/complete`, { method: "POST" });
     ctx.notice("Step completed and recorded in the progress ledger.");
@@ -178,7 +144,7 @@ async function verification(ctx) {
 export async function studyView(path, ctx) {
   if (path === "/recommendations") await recommendations(ctx);
   else if (path === "/pathways") await pathways(ctx);
-  else if (path === "/pathways/new") await newPathway(ctx);
+  else if (path === "/pathways/new") ctx.go("/courses", true);
   else if (path.endsWith("/verify")) await verification(ctx);
   else await pathway(ctx);
 }

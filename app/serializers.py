@@ -21,6 +21,7 @@ def book_data(book, average_rating=None, review_count=0):
         "book_id": book.book_id, "title": book.title, "author": book.author, "publisher": book.publisher,
         "isbn": book.isbn, "category": book.category, "description": book.description,
         "total_copies": book.total_copies, "available_copies": book.available_copies, "cover_url": book.cover_url,
+        "edition": book.edition, "source_url": book.source_url, "is_archived": book.is_archived,
         "average_rating": round(float(average_rating), 2) if average_rating is not None else None,
         "review_count": int(review_count or 0), "topics": [topic_data(topic) for topic in book.topics],
     }

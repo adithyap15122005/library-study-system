@@ -33,6 +33,7 @@ book_topic = db.Table(
     "book_topic",
     db.Column("book_id", db.Integer, foreign_key("books.book_id"), primary_key=True),
     db.Column("topic_id", db.Integer, foreign_key("topics.topic_id"), primary_key=True),
+    db.Column("is_featured", db.Boolean, nullable=False, server_default=db.text("0")),
     db.Index("ix_book_topic_topic", "topic_id", "book_id"),
     **INNODB,
 )
@@ -68,6 +69,9 @@ class Book(db.Model):
     total_copies = db.Column(db.Integer, nullable=False)
     available_copies = db.Column(db.Integer, nullable=False)
     cover_url = db.Column(db.String(1000))
+    edition = db.Column(db.String(255))
+    source_url = db.Column(db.String(1000))
+    is_archived = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text("0"))
     topics = db.relationship("Topic", secondary=book_topic, lazy="selectin", order_by="Topic.name")
 
 
@@ -153,10 +157,44 @@ class Recommendation(db.Model):
     topic = db.relationship(Topic)
 
 
+class Course(db.Model):
+    __tablename__ = "courses"
+    __table_args__ = (
+        db.CheckConstraint("difficulty_level IN ('Beginner', 'Intermediate', 'Advanced')", name="difficulty"),
+        INNODB,
+    )
+
+    course_id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(150), nullable=False, unique=True)
+    subject = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    difficulty_level = db.Column(db.String(30), nullable=False)
+    objectives = db.Column(db.JSON, nullable=False)
+    syllabus = db.relationship("CourseTopic", lazy="selectin", order_by="CourseTopic.sequence_no",
+                               cascade="all, delete-orphan")
+
+
+class CourseTopic(db.Model):
+    __tablename__ = "course_topic"
+    __table_args__ = (
+        db.UniqueConstraint("course_id", "sequence_no", name="uq_course_topic_sequence"),
+        db.CheckConstraint("sequence_no > 0 AND estimated_hours > 0", name="positive_values"),
+        INNODB,
+    )
+
+    course_id = db.Column(db.Integer, foreign_key("courses.course_id"), primary_key=True)
+    topic_id = db.Column(db.Integer, foreign_key("topics.topic_id"), primary_key=True)
+    module = db.Column(db.String(100), nullable=False)
+    sequence_no = db.Column(db.Integer, nullable=False)
+    estimated_hours = db.Column(db.Integer, nullable=False)
+    topic = db.relationship(Topic)
+
+
 class StudyPathway(db.Model):
     __tablename__ = "study_pathway"
     __table_args__ = (
         db.UniqueConstraint("pathway_id", "user_id", name="uq_study_pathway_id_user"),
+        db.UniqueConstraint("user_id", "course_id", name="uq_study_pathway_user_course"),
         db.CheckConstraint("status IN ('active', 'completed')", name="status"),
         db.Index("ix_study_pathway_user_status", "user_id", "status"),
         INNODB,
@@ -164,6 +202,7 @@ class StudyPathway(db.Model):
 
     pathway_id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, foreign_key("users.user_id"), nullable=False)
+    course_id = db.Column(db.Integer, foreign_key("courses.course_id"))
     name = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text, nullable=False, default="")
     target_goal = db.Column(db.String(255), nullable=False)
@@ -194,6 +233,8 @@ class PathwayTopic(db.Model):
     sequence_no = db.Column(db.Integer, nullable=False)
     is_completed = db.Column(db.Boolean, nullable=False, default=False, server_default=db.text("0"))
     completed_at = db.Column(DATETIME(fsp=6))
+    module = db.Column(db.String(100))
+    estimated_hours = db.Column(db.Integer)
     topic = db.relationship(Topic)
 
 

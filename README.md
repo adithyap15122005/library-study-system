@@ -1,6 +1,6 @@
 # Library Recommendation and Study Pathway System
 
-**Folio** is a digital library and study planner for the CD252IA Database Management System Lab at RV College of Engineering, Department of Computer Science and Engineering (Artificial Intelligence and Machine Learning).
+**Folio 2.0** is a digital library and course-based study planner for the CD252IA Database Management System Lab at RV College of Engineering, Department of Computer Science and Engineering (Artificial Intelligence and Machine Learning).
 
 **Project team** · Abhinav Vats, Adithya P, Dhruv Kumar
 
@@ -68,7 +68,15 @@ Apply migrations, seed the development schema, and start the Flask server.
 
 Open Folio at [http://127.0.0.1:5000](http://127.0.0.1:5000).
 
-The seed script creates 60 sample books with original catalog descriptions, 29 topics, four pathways, reviews, issued and returned loans, and genuine recommendation and ledger records. It can be rerun against the demo schema. Existing records keep their saved progress, credentials, and inventory. Sample catalog titles, authors, imprints, and ISBNs are fictional fixtures.
+The seed script installs 196 published editions across 14 subjects and 14 course syllabi. Each ISBN-13 passes a checksum and identifies an edition with title, authors, publisher, available edition statement or publication date, and a source record. Where Open Library records a cover, Folio loads it from the Open Library Covers service and falls back to a local jacket design if unavailable. [Open Library Search API](https://openlibrary.org/dev/docs/api/search) · [Open Library Covers API](https://openlibrary.org/dev/docs/api/covers)
+
+Run the seed after applying migrations on a new or existing installation. It preserves existing course customizations, credentials, loans, reviews, inventory, and completion records. The migration archives previous fictional entries from discovery and leaves their book IDs available for history. New editions start with zero copies. The administrator confirms stock from **Administration → Books & inventory → Edit**.
+
+To rerun only the ISBN import after initial setup:
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.import_catalog
+```
 
 | Development account | Email | Password configured in `.env` |
 |---|---|---|
@@ -93,6 +101,9 @@ erDiagram
     users ||--o{ study_pathway : owns
     study_pathway ||--|{ pathway_topic : orders
     topics ||--o{ pathway_topic : appears_in
+    courses ||--|{ course_topic : defines
+    topics ||--o{ course_topic : covers
+    courses o|--o{ study_pathway : generates
     books ||--o{ book_topic : covers
     topics ||--o{ book_topic : maps_to
     topics ||--o{ topic_prerequisite : is_required
@@ -114,8 +125,10 @@ erDiagram
 | `book_topic` | `(book_id, topic_id)` | `book_id` → `books`, `topic_id` → `topics` | — |
 | `topic_prerequisite` | `(prerequisite_topic_id, dependent_topic_id)` | Both topic IDs → `topics` | — |
 | `recommendation` | `rec_id` | `user_id` → `users`, `book_id` → `books`, nullable `topic_id` → `topics` | `score`, `model_type`, `generated_at`, `reason` |
-| `study_pathway` | `pathway_id` | `user_id` → `users`, unique `(pathway_id, user_id)` for ledger ownership | `name`, `description`, `target_goal`, `created_at`, `status` |
-| `pathway_topic` | `pathway_topic_id` | `pathway_id` → `study_pathway`, `topic_id` → `topics`, unique `(pathway_id, topic_id)`, `(pathway_id, sequence_no)`, `(pathway_id, pathway_topic_id)` | `sequence_no`, `is_completed`, `completed_at` |
+| `courses` | `course_id` | Unique `name` | `subject`, `description`, `difficulty_level`, `objectives` |
+| `course_topic` | `(course_id, topic_id)` | References `courses`, `topics`, unique `(course_id, sequence_no)` | `module`, `sequence_no`, `estimated_hours` |
+| `study_pathway` | `pathway_id` | User FK, optional course FK, unique `(user_id, course_id)`, unique `(pathway_id, user_id)` | `name`, `description`, `target_goal`, `created_at`, `status` |
+| `pathway_topic` | `pathway_topic_id` | Pathway and topic FKs, unique `(pathway_id, topic_id)`, `(pathway_id, sequence_no)`, `(pathway_id, pathway_topic_id)` | `sequence_no`, `is_completed`, `completed_at`, generated `module` and `estimated_hours` snapshots |
 | `progress_ledger` | `ledger_id` | `user_id` → `users`, `(pathway_id, user_id)` → `study_pathway`, `(pathway_id, pathway_topic_id)` → `pathway_topic`, unique `pathway_topic_id` | `event_type`, `event_time`, `previous_hash`, `entry_hash`, `hash_version` |
 
 Independent entities and junction tables keep most data in third normal form. Interests are a JSON list of user-selected keywords. `available_copies` is controlled derived data equal to `total_copies` minus currently issued copies. Issue and return operations lock the book row before changing a loan and stock together. The issue operation permits one active checkout per student and book to prevent duplicate submissions. Inventory edits use the same book lock and reject totals below current issues. InnoDB commits both changes or rolls both back. `overdue` is computed from an active loan's due date. All database timestamps represent UTC.
@@ -148,7 +161,9 @@ The saved score is `0.80 × cosine similarity + 0.20 × topic relevance`. Topic 
 
 ### Prerequisite-aware pathways
 
-Prerequisite edges point from required topic to dependent topic. Adding an edge checks for cycles and protects existing pathway order. During creation the service finds all transitive prerequisites. A missing-topic response lets students explicitly include them on retry. Topological sorting produces a stable sequence. The completion endpoint checks student ownership, direct prerequisites in the same pathway, and every earlier step before writing progress.
+Prerequisite edges point from required topic to dependent topic. A course preview and pathway generation use the same stable topological sort and automatically include the full transitive closure. The curated syllabus breaks ties among eligible steps. Prerequisites without an explicit workload receive two hours and inherit the module where they are first needed. Every student gets at most one pathway per course, including on concurrent requests. Each generated pathway snapshots its module and hour estimates and starts with 0% progress and an empty ledger. Admins can create or edit curricula under **Explore courses**. Existing generated pathways retain their sequence and workload.
+
+The reading list considers verified editions with an actual topic association. Curated matches lead each reading list, and the existing TF-IDF scorer ranks remaining matches using topic metadata, catalogue text, and availability. A topic without a suitable verified association shows an empty reading state. Completion still checks student ownership, direct prerequisites, and every earlier step before signing progress.
 
 ### Hash-linked progress
 
@@ -171,7 +186,9 @@ The trust model is a centralized, append-only audit history through the applicat
 | Borrowing | `POST /api/borrows`, `GET /api/borrows/me`, `POST /api/borrows/{borrow_id}/return` |
 | Topics | `GET /api/topics`, `GET /api/topics/{topic_id}`, `GET /api/topics/{topic_id}/prerequisites` |
 | Book recommendations | `POST /api/recommendations/generate`, `GET /api/recommendations/me` |
-| Pathways | `POST /api/pathways`, `GET /api/pathways/me`, `GET /api/pathways/{pathway_id}`, `GET /api/pathways/{pathway_id}/topics` |
+| Courses | `GET /api/courses`, `GET /api/courses/{course_id}`, `GET /api/courses/{course_id}/preview` |
+| Curriculum administration | `POST /api/admin/courses`, `PUT /api/admin/courses/{course_id}` |
+| Pathways | `POST /api/pathways/from-course`, `GET /api/pathways/me`, `GET /api/pathways/{pathway_id}`, `GET /api/pathways/{pathway_id}/topics`. The legacy `POST /api/pathways` remains available to existing clients. |
 | Completion and verification | `POST /api/pathway-topics/{pathway_topic_id}/complete`, `GET /api/pathways/{pathway_id}/ledger`, `GET /api/pathways/{pathway_id}/ledger/verify` |
 | Admin catalog | `POST /api/admin/books`, `PUT /api/admin/books/{book_id}`, `PUT /api/admin/books/{book_id}/inventory`, `PUT /api/admin/books/{book_id}/topics` |
 | Admin topics | `POST /api/admin/topics`, `PUT /api/admin/topics/{topic_id}`, `POST /api/admin/prerequisites`, `DELETE /api/admin/prerequisites/{prerequisite_id}/{dependent_id}` |
@@ -193,19 +210,27 @@ Ensure `TEST_DATABASE_URL` points to the separate disposable MySQL schema create
 
 ## Classroom demonstration
 
-1. Register a new student, sign out, and sign in again. Open the profile and add Python and Machine Learning interests.
-2. Search the catalog for **Python Patterns for First Programs**. Issue a copy, check the change in availability, and open **My Borrowings** to confirm the due date. Return it and verify that history retains the returned record.
-3. Generate recommendations, inspect the model scores and explanation, and compare them after changing interests or choosing a new focus topic.
-4. Create a pathway with **Supervised Learning**. First request only that topic to see the list of missing prerequisites, then allow Folio to include them. Inspect the order and why later steps are locked.
-5. Complete the first eligible step and open **Verify Progress**. Inspect its completion timestamp, previous hash, and verified status. Complete the next step to see the new link.
-6. Sign in as Maya to inspect the seeded overdue loan and partially completed **Machine Learning Foundations** pathway. Adil's **SQL Reporting Essentials** is a completed example.
-7. Sign in as the administrator to inspect stock, borrowing records, and progress. Edit a book, link a topic, and add a valid prerequisite relationship. Try an administrator route while signed in as a student to verify backend authorization.
-8. Restart Flask and sign in again to verify persistent loans and pathways. Run pytest on the separate schema to observe that a changed ledger field or broken link fails verification.
+1. Sign in as Maya or register. Open **Explore courses → Machine Learning → Preview pathway**.
+2. Select **Create my pathway**. The generated pathway starts with 24 topics, five modules, 52 estimated hours, and 0% completion. Linear Algebra includes *Mathematics for Machine Learning*, Linear Regression includes *Hands-On Machine Learning with Scikit-Learn, Keras, and TensorFlow*, and Production Systems includes *Designing Machine Learning Systems*.
+3. Complete the first available topic and open **Verify progress**. Inspect the signed event and verify that repeating course generation reopens the same pathway.
+4. In an admin session, confirm one physical copy of a published edition. Borrow and return it in a student session and inspect the stock count and loan history.
+
+[Course selection](docs/screenshots/course-selection.png) · [Generated Machine Learning pathway](docs/screenshots/generated-machine-learning-pathway.png)
+
+## Folio 2.0 implementation
+
+| Area | Files |
+| --- | --- |
+| Database | `app/models.py`, `migrations/versions/0002_courses.py`, `0003_featured_reading.py`, `sql/schema.sql` |
+| Verified books and curricula | `scripts/verified_editions.json`, `scripts/import_catalog.py`, `scripts/curricula.py`, `scripts/seed_data.py` |
+| Course APIs and ordering | `app/routes/courses.py`, `app/services/course_service.py`, `app/services/prerequisite_service.py` |
+| Dashboard, course previews, reading and timelines | `app/static/js/app.js`, `courses.js`, `study.js`, `library.js`, `app/static/css/folio.css` |
+| Regression coverage | `tests/test_courses.py` and the original library and learning suites |
 
 ## Feature verification checklist
 
 - [x] Flask starts and seeded demo records load from MySQL 8.4.8.
-- [x] Migrations create the eleven InnoDB project tables, 17 foreign keys, 13 check constraints, and two report views. All 12 SQL reports and both `EXPLAIN` queries execute. Inventory reconciliation returns zero discrepancies.
+- [x] Migrations create the 13 InnoDB project tables and preserve the two report views.
 - [x] Registration, login, profile editing, and role checks work.
 - [x] Catalog search, filters, details, and review summaries reflect stored records.
 - [x] Checkout and return adjust availability atomically and preserve history, including concurrent checkout of the last copy and rollback after a failed write.
@@ -213,4 +238,5 @@ Ensure `TEST_DATABASE_URL` points to the separate disposable MySQL schema create
 - [x] Pathways include prerequisite order and reject locked or unauthorized completions.
 - [x] Completion and ledger events commit together. Verification detects altered event data, broken links, and missing events.
 - [x] Chrome smoke checks reached all student and administrator screens, including mobile navigation and ledger verification after a Flask restart.
-- [x] All 22 automated tests passed against a separate MySQL 8.4.8 schema.
+- [x] All 27 automated tests passed against a separate MySQL 8.4.8 schema, including the original 22 tests.
+- [x] Chrome verified the 14-course catalogue, one-click generation of the 24-topic Machine Learning pathway, its initial 0% progress, and its mobile layout.

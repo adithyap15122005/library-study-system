@@ -148,6 +148,12 @@ def _rank_books(books, profile, interests, preferred_ids, reviews, *, include_fa
     return [(book, 0.0, reason) for book in ordered]
 
 
+def rank_topic_books(books, topic_id, name, description):
+    return [book for book, _, _ in _rank_books(
+        books, [name, description], [name], {topic_id}, {}, include_fallback=False,
+    )]
+
+
 def generate_recommendations(user, topic_id=None, limit=8):
     # Keep a single, complete ranking per student and recommendation context.
     user = db.session.scalar(
@@ -157,7 +163,8 @@ def generate_recommendations(user, topic_id=None, limit=8):
     if topic_id is not None and focus_topic is None:
         raise APIError(404, "This recommendation topic was not found.")
 
-    books = list(db.session.scalars(db.select(Book).options(selectinload(Book.topics)).order_by(Book.book_id)))
+    books = list(db.session.scalars(db.select(Book).where(Book.is_archived.is_(False))
+                                   .options(selectinload(Book.topics)).order_by(Book.book_id)))
     books_by_id = {book.book_id: book for book in books}
     profile, interests, preferred_ids = _preference_profile(user, focus_topic, books_by_id)
     ranked = _rank_books(books, profile, interests, preferred_ids, _recent_reviews(), include_fallback=focus_topic is None)

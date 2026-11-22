@@ -13,7 +13,7 @@ async function catalog(ctx) {
   const data = await api(`/books?${query}`);
   const { items, categories, subjects, total, page, pages } = data;
   const optionList = (name, options) => options.map(value => option(value, value, params.get(name))).join("");
-  ctx.render(`${heading("Library catalog", "Find books by title, author, or the topics you want to learn.")}
+  ctx.render(`${heading("Browse books", "Explore published editions and check which copies your library has in stock.")}
     <form class="panel filters" id="catalog-form" role="search">
       ${field("Search", `<input type="search" name="q" value="${esc(params.get("q"))}" placeholder="Title, author, or topic" maxlength="120">`)}
       ${field("Category", `<select name="category"><option value="">All categories</option>${optionList("category", categories)}</select>`)}
@@ -50,11 +50,12 @@ async function details(ctx) {
       ${bookArt(book, true)}
       <div>${book.category ? `<div class="eyebrow">${esc(book.category)}</div>` : ""}
         <h1>${esc(book.title)}</h1><div class="muted">By ${esc(book.author)}</div>
-        <div class="meta">${rating(book)} ${book.publisher ? `<span>${esc(book.publisher)}</span>` : ""} ${book.isbn ? `<span>ISBN ${esc(book.isbn)}</span>` : ""}</div>
+        <div class="meta">${rating(book)} ${book.publisher ? `<span>${esc(book.publisher)}</span>` : ""} ${book.edition ? `<span>${esc(book.edition)}</span>` : ""} ${book.isbn ? `<span>ISBN ${esc(book.isbn)}</span>` : ""}</div>
+        ${/^https:\/\/openlibrary\.org\/books\/OL\d+M$/.test(book.source_url || "") ? `<a class="inline-link" target="_blank" rel="noopener noreferrer" href="${esc(book.source_url)}">Open Library edition</a>` : ""}
         <p class="description">${esc(book.description)}</p>
         ${topics.length ? `<div class="tags">${topics.map(topic => `<a aria-label="Search catalog for ${esc(topic.name)}" href="/catalog?q=${encodeURIComponent(topic.name)}">${badge(topic.name, "neutral")}</a>`).join("")}</div>` : ""}
         <div class="section actions">${stock(book)}<span class="small muted">${book.total_copies} total ${book.total_copies === 1 ? "copy" : "copies"}</span>
-        ${student ? `<button class="button primary" type="button" data-action="borrow" ${book.available_copies < 1 ? "disabled" : ""}>${icon("book", true)} Borrow a copy</button>` : ""}</div>
+        ${student && !book.is_archived ? `<button class="button primary" type="button" data-action="borrow" ${book.available_copies < 1 ? "disabled" : ""}>${icon("book", true)} Borrow a copy</button>` : ""}</div>
       </div>
     </article>
     <div class="${student ? "split" : ""} section">

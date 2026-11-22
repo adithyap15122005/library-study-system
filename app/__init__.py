@@ -27,10 +27,11 @@ def create_app(config=None):
     from .routes.auth import auth
     from .routes.books import books
     from .routes.borrowing import borrowing
+    from .routes.courses import courses
     from .routes.learning import learning
     from .routes.pages import pages
 
-    for blueprint in (auth, books, borrowing, learning, admin, pages):
+    for blueprint in (auth, books, borrowing, learning, courses, admin, pages):
         app.register_blueprint(blueprint)
 
     @app.before_request

@@ -18,6 +18,8 @@ def lock_book(book_id):
 
 def issue_book(user_id, book_id):
     book = lock_book(book_id)
+    if book.is_archived:
+        raise APIError(409, "This archived title is unavailable for new loans.")
     active_id = db.session.scalar(
         db.select(Borrow.borrow_id).where(
             Borrow.book_id == book_id, Borrow.user_id == user_id, Borrow.status == "issued",

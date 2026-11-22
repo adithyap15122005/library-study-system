@@ -200,3 +200,52 @@ SELECT sp.pathway_id, sp.user_id, sp.name, sp.status,
 FROM study_pathway AS sp
 LEFT JOIN pathway_topic AS pt ON pt.pathway_id = sp.pathway_id
 GROUP BY sp.pathway_id, sp.user_id, sp.name, sp.status;
+
+-- Running upgrade 0001_folio -> 0002_courses
+
+ALTER TABLE books ADD COLUMN edition VARCHAR(255);
+
+ALTER TABLE books ADD COLUMN source_url VARCHAR(1000);
+
+ALTER TABLE books ADD COLUMN is_archived BOOL NOT NULL DEFAULT 0;
+
+UPDATE books SET is_archived = 1
+        WHERE isbn REGEXP '^9780000000[0-9]{3}$'
+          AND publisher IN ('Meridian Academic', 'Northbridge Technical Press', 'Lab Manual Collective');
+
+CREATE TABLE courses (
+    course_id INTEGER NOT NULL AUTO_INCREMENT,
+    name VARCHAR(150) NOT NULL,
+    subject VARCHAR(100) NOT NULL,
+    description TEXT NOT NULL,
+    difficulty_level VARCHAR(30) NOT NULL,
+    objectives JSON NOT NULL,
+    CONSTRAINT pk_courses PRIMARY KEY (course_id),
+    CONSTRAINT uq_courses_name UNIQUE (name),
+    CONSTRAINT ck_courses_ck_courses_difficulty CHECK (difficulty_level IN ('Beginner', 'Intermediate', 'Advanced'))
+)ENGINE=InnoDB CHARSET=utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+
+CREATE TABLE course_topic (
+    course_id INTEGER NOT NULL,
+    topic_id INTEGER NOT NULL,
+    module VARCHAR(100) NOT NULL,
+    sequence_no INTEGER NOT NULL,
+    estimated_hours INTEGER NOT NULL,
+    CONSTRAINT pk_course_topic PRIMARY KEY (course_id, topic_id),
+    CONSTRAINT fk_course_topic_course_id_courses FOREIGN KEY(course_id) REFERENCES courses (course_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT fk_course_topic_topic_id_topics FOREIGN KEY(topic_id) REFERENCES topics (topic_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT uq_course_topic_sequence UNIQUE (course_id, sequence_no),
+    CONSTRAINT ck_course_topic_ck_course_topic_positive_values CHECK (sequence_no > 0 AND estimated_hours > 0)
+)ENGINE=InnoDB CHARSET=utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+
+ALTER TABLE study_pathway ADD COLUMN course_id INTEGER;
+
+ALTER TABLE study_pathway ADD CONSTRAINT fk_study_pathway_course_id_courses FOREIGN KEY(course_id) REFERENCES courses (course_id) ON DELETE RESTRICT ON UPDATE RESTRICT;
+
+ALTER TABLE study_pathway ADD CONSTRAINT uq_study_pathway_user_course UNIQUE (user_id, course_id);
+
+ALTER TABLE pathway_topic ADD COLUMN module VARCHAR(100);
+
+ALTER TABLE pathway_topic ADD COLUMN estimated_hours INTEGER;
+
+ALTER TABLE book_topic ADD COLUMN is_featured BOOL NOT NULL DEFAULT 0;

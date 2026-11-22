@@ -7,16 +7,18 @@ let viewId = 0;
 
 const nav = [
   ["/dashboard", "Overview", "layout"],
-  ["/catalog", "Library catalog", "library"],
+  ["/courses", "Explore courses", "path"],
+  ["/catalog", "Browse books", "library"],
   ["/borrowing", "My borrowings", "clock"],
   ["/recommendations", "Recommendations", "spark"],
-  ["/pathways", "Study pathways", "path"],
+  ["/pathways", "My study pathways", "path"],
   ["/profile", "My profile", "user"],
   ["/admin", "Administration", "shield"],
 ];
 
 function routeName(path) {
   if (path.startsWith("/books/")) return "/catalog";
+  if (path.startsWith("/courses/")) return "/courses";
   if (user?.role === "admin" && path.endsWith("/verify")) return "/admin";
   if (path.startsWith("/pathways/")) return "/pathways";
   return path;
@@ -144,15 +146,18 @@ async function dashboard(ctx) {
     go("/admin", true);
     return;
   }
-  const [data, recommendations, pathways] = await Promise.all([
-    api("/dashboard"), api("/recommendations/me"), api("/pathways/me"),
+  const [data, recommendations, pathways, catalogue, { courseCard }] = await Promise.all([
+    api("/dashboard"), api("/recommendations/me"), api("/pathways/me"), api("/courses"), import("./courses.js"),
   ]);
   const firstName = user.name.trim().split(/\s+/)[0];
   const active = (pathways.pathways || []).find(pathway => pathway.status === "active");
   const picks = (recommendations.recommendations || []).slice(0, 4);
+  const featured = ["Machine Learning", "Database Management Systems", "Python"].map(
+    name => catalogue.courses.find(course => course.name === name),
+  ).filter(Boolean);
   ctx.render(`${heading(`Welcome, ${firstName}`, "Here’s what’s happening in your library and study pathways.")}
     <section class="dash-hero"><div><span class="eyebrow">Your library</span><h2>What will you learn next?</h2><p>Find a book for your next topic or pick up an active study pathway.</p>
-      <div class="actions">${linkTo("/catalog", "Browse catalog", "arrow", "button light")}${linkTo("/pathways", "Study pathways", "", "button on-dark")}</div>
+      <div class="actions">${linkTo("/courses", "Explore courses", "arrow", "button light")}${linkTo("/catalog", "Browse real books", "", "button on-dark")}</div>
     </div></section>
     <section class="stats" aria-label="Library and study activity">
       ${stat("Books borrowed", data.total_borrowed, "book", "All borrowing activity")}
@@ -160,17 +165,19 @@ async function dashboard(ctx) {
       ${stat("Active pathways", data.active_pathways, "path", "In progress", "blue")}
       ${stat("Steps completed", data.completed_steps, "check", "Across all pathways")}
     </section>
-    <section class="section">${sectionHeading("Recommended for you", "", linkTo("/recommendations", "View recommendations"))}
-      ${picks.length ? `<div class="book-grid">${picks.map(item => bookCard(item.book, item)).join("")}</div>` : empty("Find your next read", "Generate book picks from your interests or a topic you want to learn.", linkTo("/recommendations", "Get recommendations"), "spark")}
-    </section>
     <div class="split section">
+      <section class="panel pad">${sectionHeading("Continue learning", "", linkTo("/pathways", "My study pathways"))}
+        ${active ? `<div class="path-card"><h3>${escapeHTML(active.name)}</h3><p>${active.completed_steps} of ${active.total_steps} steps complete</p>${progress(active)}${linkTo(`/pathways/${Number(active.pathway_id)}`, "Resume pathway")}</div>` : empty("Start a course", "Choose a course to generate your full study pathway.", linkTo("/courses", "Explore courses"), "path")}
+      </section>
       <section class="panel pad">${sectionHeading("Recent activity", "", linkTo("/borrowing", "View borrowings"))}
         ${data.recent_borrows.length ? `<ul class="activity">${data.recent_borrows.map(loan => `<li><span class="icon-frame">${icon("book")}</span><div><strong><a href="/books/${Number(loan.book_id)}">${escapeHTML(loan.title)}</a></strong><span class="small muted">${dateLabel(loan.return_date || loan.issue_date)}</span></div>${loanBadge(loan)}</li>`).join("")}</ul>` : empty("No borrowing activity", "Borrow a copy to start building your library history.")}
       </section>
-      <section class="panel pad">${sectionHeading("Continue learning")}
-        ${active ? `<div class="path-card"><h3>${escapeHTML(active.name)}</h3><p>${active.completed_steps} of ${active.total_steps} steps complete</p>${progress(active)}${linkTo(`/pathways/${Number(active.pathway_id)}`, "Resume pathway")}</div>` : empty("Create a pathway", "Choose topics and let Folio put their prerequisites in order.", linkTo("/pathways/new", "Create pathway"), "path")}
-      </section>
-    </div>`);
+    </div>
+    ${featured.length ? `<section class="section">${sectionHeading("Explore courses", "", linkTo("/courses", "View all courses"))}
+      <div class="course-grid">${featured.map(course => courseCard(course, course.name === "Machine Learning")).join("")}</div></section>` : ""}
+    <section class="section">${sectionHeading("Recommended for you", "", linkTo("/recommendations", "View recommendations"))}
+      ${picks.length ? `<div class="book-grid">${picks.map(item => bookCard(item.book, item)).join("")}</div>` : empty("Find your next read", "Generate book picks from your interests or a topic you want to learn.", linkTo("/recommendations", "Get recommendations"), "spark")}
+    </section>`);
 }
 
 async function profile(ctx) {
@@ -293,12 +300,16 @@ async function load() {
     return;
   }
   workspaceFrame(path);
-  const match = path.match(/\d+$/) || path.match(/\/(\d+)\/verify$/);
+  const match = path.match(/\d+$/) || path.match(/\/(\d+)\/(?:verify|edit)$/);
   const params = match ? [Number(match[1] || match[0])] : [];
   const ctx = context(id, params);
   try {
     if (path === "/dashboard") await dashboard(ctx);
     else if (path === "/profile") await profile(ctx);
+    else if (path === "/courses" || path.startsWith("/courses/")) {
+      const { courseView } = await import("./courses.js");
+      await courseView(path, ctx);
+    }
     else if (path === "/catalog" || path.startsWith("/books/") || path === "/borrowing") {
       const { libraryView } = await import("./library.js");
       await libraryView(path, ctx);

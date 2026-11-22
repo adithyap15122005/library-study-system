@@ -56,7 +56,10 @@ def catalog():
     page = integer(request.args.get("page", 1), "Page", maximum=10000)
     per_page = integer(request.args.get("per_page", 12), "Page size", maximum=50)
 
+    include_archived = g.user.role == "admin" and request.args.get("archived") == "1"
     statement = db.select(Book)
+    if not include_archived:
+        statement = statement.where(Book.is_archived.is_(False))
     relevance = None
     if query:
         terms = re.findall(r"[\w+#.-]+", query)
@@ -91,8 +94,10 @@ def catalog():
         raise APIError(400, "Choose a valid sort order.")
 
     paged = db.paginate(statement.order_by(Book.title, Book.book_id), page=page, per_page=per_page, error_out=False)
-    categories = db.session.scalars(db.select(Book.category).where(Book.category.is_not(None)).distinct()
-                                   .order_by(Book.category)).all()
+    category_options = db.select(Book.category).where(Book.category.is_not(None))
+    if not include_archived:
+        category_options = category_options.where(Book.is_archived.is_(False))
+    categories = db.session.scalars(category_options.distinct().order_by(Book.category)).all()
     subjects = db.session.scalars(db.select(Topic.subject).distinct().order_by(Topic.subject)).all()
     return {
         "items": rated_books(paged.items), "page": paged.page, "pages": paged.pages, "total": paged.total,
@@ -114,7 +119,9 @@ def book_detail(book_id):
         related = db.select(Book).where(Book.category == book.category)
     else:
         related = db.select(Book).where(db.false())
-    related = related.where(Book.book_id != book_id).order_by(Book.available_copies.desc(), Book.title, Book.book_id)
+    related = related.where(Book.book_id != book_id, Book.is_archived.is_(False)).order_by(
+        Book.available_copies.desc(), Book.title, Book.book_id,
+    )
     result = rated_books([book])[0]
     result["related_books"] = rated_books(db.session.scalars(related.limit(4)).all())
     return result

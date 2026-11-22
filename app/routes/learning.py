@@ -11,23 +11,38 @@ from app.serializers import book_data, topic_data
 from app.services.ledger_service import read_entries, verify_chain
 from app.services.pathway_service import assert_pathway_owner, complete_step, create_pathway, missing_steps
 from app.services.prerequisite_service import add_prerequisite, prerequisite_graph, remove_prerequisite
-from app.services.recommendation_service import generate_recommendations
+from app.services.recommendation_service import generate_recommendations, rank_topic_books
 
 learning = Blueprint("learning", __name__, url_prefix="/api")
 
 
-def books_by_topic(topic_ids):
+def books_by_topic(topic_ids, *, verified=False):
     statement = (
-        db.select(book_topic.c.topic_id, Book)
+        db.select(book_topic.c.topic_id, Book, book_topic.c.is_featured)
         .join(Book, Book.book_id == book_topic.c.book_id)
-        .where(book_topic.c.topic_id.in_(topic_ids))
+        .where(book_topic.c.topic_id.in_(topic_ids), Book.is_archived.is_(False))
         .order_by(book_topic.c.topic_id, Book.title, Book.book_id)
     )
+    if verified:
+        statement = statement.where(Book.source_url.is_not(None), Book.isbn.is_not(None))
     rows = list(db.session.execute(statement))
-    ratings = ratings_for({book.book_id for _, book in rows})
+    ratings = ratings_for({book.book_id for _, book, _ in rows})
+    candidates = defaultdict(list)
+    featured = set()
+    for topic_id, book, is_featured in rows:
+        candidates[topic_id].append(book)
+        if is_featured:
+            featured.add((topic_id, book.book_id))
+    if verified:
+        topics = db.session.scalars(db.select(Topic).where(Topic.topic_id.in_(candidates.keys())))
+        for topic in topics:
+            candidates[topic.topic_id] = rank_topic_books(
+                candidates[topic.topic_id], topic.topic_id, topic.name, topic.description,
+            )
+            candidates[topic.topic_id].sort(key=lambda book: (topic.topic_id, book.book_id) not in featured)
     grouped = defaultdict(list)
-    for topic_id, book in rows:
-        grouped[topic_id].append(book_data(book, *ratings.get(book.book_id, (None, 0))))
+    for topic_id, books in candidates.items():
+        grouped[topic_id] = [book_data(book, *ratings.get(book.book_id, (None, 0))) for book in books]
     return grouped
 
 
@@ -47,6 +62,8 @@ def pathway_summary(pathway):
         "pathway_id": pathway.pathway_id, "name": pathway.name, "description": pathway.description,
         "target_goal": pathway.target_goal, "created_at": iso(pathway.created_at), "status": pathway.status,
         "total_steps": total, "completed_steps": completed,
+        "course_id": pathway.course_id,
+        "estimated_hours": sum(step.estimated_hours or 0 for step in pathway.steps),
         "progress_percent": round(100 * completed / total) if total else 0,
     }
 
@@ -56,7 +73,7 @@ def pathway_detail(pathway):
     step_topic_ids = {step.topic_id for step in pathway.steps}
     reference_ids = step_topic_ids.union(*(graph.get(topic_id, ()) for topic_id in step_topic_ids))
     names = topic_names(reference_ids)
-    book_map = books_by_topic(step_topic_ids)
+    book_map = books_by_topic(step_topic_ids, verified=pathway.course_id is not None)
     steps = []
     for step in pathway.steps:
         blocked_by = [] if step.is_completed else missing_steps(step, pathway.steps, graph)
@@ -64,9 +81,11 @@ def pathway_detail(pathway):
         steps.append({
             **topic_data(step.topic),
             "pathway_topic_id": step.pathway_topic_id, "sequence_no": step.sequence_no,
+            "module": step.module, "estimated_hours": step.estimated_hours,
             "is_completed": step.is_completed, "completed_at": iso(step.completed_at), "state": state,
             "prerequisites": topic_references(sorted(graph.get(step.topic_id, ())), names),
-            "blocked_by": topic_references(blocked_by, names), "books": book_map[step.topic_id],
+            "blocked_by": topic_references(blocked_by, names),
+            "books": book_map[step.topic_id][:5] if pathway.course_id else book_map[step.topic_id],
         })
     return {**pathway_summary(pathway), "steps": steps}
 
@@ -240,7 +259,9 @@ def recommendations_get():
     topic_id = integer(raw_topic, "Topic ID") if raw_topic is not None else None
     statement = (
         db.select(Recommendation)
+        .join(Recommendation.book)
         .where(Recommendation.user_id == g.user.user_id, Recommendation.topic_id == topic_id)
+        .where(Book.is_archived.is_(False))
         .options(selectinload(Recommendation.book), selectinload(Recommendation.topic))
         .order_by(Recommendation.rec_id)
     )

@@ -108,6 +108,7 @@ export function bookArt(book, large = false) {
 }
 
 export function stock(book) {
+  if (book.is_archived) return badge("Archived", "neutral");
   const available = Number(book.available_copies) || 0;
   return badge(`${available} available`, available > 0 ? "" : "neutral");
 }

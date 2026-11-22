@@ -40,7 +40,7 @@ def prerequisite_closure(topic_ids, graph):
     return included
 
 
-def topological_order(topic_ids, graph):
+def topological_order(topic_ids, graph, priority=None):
     included = set(topic_ids)
     waiting = {}
     dependents = defaultdict(list)
@@ -50,16 +50,19 @@ def topological_order(topic_ids, graph):
         for prerequisite_id in prerequisites:
             dependents[prerequisite_id].append(topic_id)
 
-    ready = [topic_id for topic_id in included if waiting[topic_id] == 0]
+    def queue_entry(topic_id):
+        return (priority[topic_id] if priority is not None else topic_id, topic_id)
+
+    ready = [queue_entry(topic_id) for topic_id in included if waiting[topic_id] == 0]
     heapify(ready)
     ordered = []
     while ready:
-        topic_id = heappop(ready)
+        _, topic_id = heappop(ready)
         ordered.append(topic_id)
         for dependent_id in dependents[topic_id]:
             waiting[dependent_id] -= 1
             if waiting[dependent_id] == 0:
-                heappush(ready, dependent_id)
+                heappush(ready, queue_entry(dependent_id))
     if len(ordered) != len(included):
         raise APIError(409, "The selected topics contain a circular prerequisite relationship.")
     return ordered
