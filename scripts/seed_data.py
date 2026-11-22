@@ -1,8 +1,10 @@
 """Install the Folio curricula, shared topics and verified catalogue."""
 
+from argparse import ArgumentParser
+
 from app import create_app
 from app.extensions import db
-from app.models import Course, CourseTopic, Topic, User, topic_prerequisite
+from app.models import Book, Borrow, Course, CourseTopic, Topic, User, topic_prerequisite
 from app.passwords import hash_password
 from app.services.prerequisite_service import add_prerequisite
 from scripts.curricula import CURRICULA, TOPIC_OBJECTIVES
@@ -71,14 +73,41 @@ def seed_courses():
             edges.add(edge)
 
 
+def seed_demo_inventory(records, copies):
+    """Set initial stock only for bundled editions that have no stock or loan history."""
+    has_loan_history = db.select(Borrow.borrow_id).where(Borrow.book_id == Book.book_id).exists()
+    statement = (
+        db.select(Book)
+        .where(Book.isbn.in_([record["isbn"] for record in records]), Book.source_url.is_not(None),
+               Book.is_archived.is_(False), Book.total_copies == 0, ~has_loan_history)
+        .order_by(Book.book_id)
+        .with_for_update()
+    )
+    books = list(db.session.scalars(statement))
+    for book in books:
+        book.total_copies = book.available_copies = copies
+    return len(books)
+
+
 def main():
+    parser = ArgumentParser(description=__doc__)
+    parser.add_argument("--demo-copies", type=int, metavar="N",
+                        help="Assign N simulated copies to each unstocked bundled edition with no loan history.")
+    args = parser.parse_args()
+    if args.demo_copies is not None and not 1 <= args.demo_copies <= 99:
+        parser.error("--demo-copies must be between 1 and 99")
+
     app = create_app()
     with app.app_context():
         seed_accounts(app.config["DEMO_PASSWORD"], app.config["DEMO_ADMIN_PASSWORD"])
         seed_courses()
-        count = import_editions(load_editions())
+        editions = load_editions()
+        count = import_editions(editions)
+        stocked = seed_demo_inventory(editions, args.demo_copies) if args.demo_copies is not None else 0
         db.session.commit()
         print(f"Seeded {count} verified editions and {len(CURRICULA)} default courses.")
+        if args.demo_copies is not None:
+            print(f"Added {args.demo_copies} simulated copies per title to {stocked} demo editions.")
 
 
 if __name__ == "__main__":

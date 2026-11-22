@@ -7,7 +7,7 @@ import pytest
 from app.extensions import db
 from app.models import Book, Borrow, ProgressLedger, StudyPathway, topic_prerequisite
 from scripts.import_catalog import import_editions, load_editions, valid_isbn
-from scripts.seed_data import seed_courses
+from scripts.seed_data import seed_courses, seed_demo_inventory
 
 
 def test_bundled_editions_are_unique_and_have_source_records():
@@ -37,6 +37,28 @@ def test_import_idempotence_preserves_book_ids_stock_and_loans(app, sign_in, cha
         assert db.session.scalar(db.select(db.func.count()).select_from(Book).where(
             Book.isbn.in_([record["isbn"] for record in records]),
         )) == len(records)
+
+
+def test_demo_stock_preserves_existing_stock_and_loan_history(app, sign_in, change):
+    records = load_editions()[:3]
+    with app.app_context():
+        import_editions(records)
+        books = [db.session.scalar(db.select(Book).where(Book.isbn == record["isbn"])) for record in records]
+        books[1].total_copies = books[1].available_copies = 4
+        books[2].total_copies = books[2].available_copies = 1
+        ids = [book.book_id for book in books]
+        db.session.commit()
+    student = sign_in()
+    loan = change(student, "POST", "/api/borrows", {"book_id": ids[2]}).get_json()
+    assert change(student, "POST", f"/api/borrows/{loan['borrow_id']}/return").status_code == 200
+    with app.app_context():
+        book_with_history = db.session.get(Book, ids[2])
+        book_with_history.total_copies = book_with_history.available_copies = 0
+        db.session.flush()
+        assert seed_demo_inventory(records, 3) == 1
+        db.session.commit()
+        assert [db.session.get(Book, identifier).available_copies for identifier in ids] == [3, 4, 0]
+        assert seed_demo_inventory(records, 3) == 0
 
 
 @pytest.fixture

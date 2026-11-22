@@ -78,6 +78,12 @@ To rerun only the ISBN import after initial setup:
 .\.venv\Scripts\python.exe -m scripts.import_catalog
 ```
 
+For a classroom demonstration, you can explicitly assign simulated inventory to bundled editions with zero stock and no loan history. The book import itself still starts new editions at zero.
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.seed_data --demo-copies 3
+```
+
 | Development account | Email | Password configured in `.env` |
 |---|---|---|
 | Maya Rao | `maya@example.test` | `DEMO_PASSWORD` |
